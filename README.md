@@ -110,6 +110,16 @@ then running:
 $ accelerate launch train.py --config CONFIG_FILE --name RUN_NAME
 ```
 
+
+### Grayscale example
+
+A small grayscale training script is provided at `train_fixed.py`. It expects
+PNG images arranged under `vel_dataset_processed` and uses the configuration
+`configs/config_vel.json`.
+
+```sh
+$ ./train_fixed.py --config configs/config_vel.json --name RUN_NAME
+```
 ## Enhancements/additional features
 
 - k-diffusion supports a highly efficient hierarchical transformer model type.
