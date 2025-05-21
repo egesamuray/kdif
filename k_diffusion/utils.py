@@ -31,6 +31,7 @@ def to_pil_image(x):
         x = x[0]
     if x.shape[0] == 1:
         x = x[0]
+    x = x.cpu()
     return TF.to_pil_image((x.clamp(-1, 1) + 1) / 2)
 
 
