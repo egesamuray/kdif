@@ -120,6 +120,16 @@ PNG images arranged under `vel_dataset_processed` and uses the configuration
 ```sh
 $ ./train_fixed.py --config configs/config_vel.json --name RUN_NAME
 ```
+
+### Well log example
+
+A minimal loader for 1‑D well log data is provided in
+`datasets/well_log_dataset.py`. It expects `.npy` files inside the directory
+specified by `configs/config_well_log.json`.
+
+```sh
+$ accelerate launch train.py --config configs/config_well_log.json --name RUN_NAME
+```
 ## Enhancements/additional features
 
 - k-diffusion supports a highly efficient hierarchical transformer model type.

@@ -1,0 +1,48 @@
+{
+    "model": {
+        "type": "image_v1",
+        "input_channels": 1,
+        "input_size": [256, 1],
+        "patch_size": 1,
+        "mapping_out": 256,
+        "depths": [2, 4, 4],
+        "channels": [64, 128, 256],
+        "self_attn_depths": [false, false, false],
+        "has_variance": false,
+        "loss_config": "karras",
+        "loss_weighting": "soft-min-snr",
+        "dropout_rate": 0.05,
+        "augment_wrapper": true,
+        "augment_prob": 0.0,
+        "sigma_data": 0.6162,
+        "sigma_min": 0.01,
+        "sigma_max": 80,
+        "sigma_sample_density": {
+            "type": "cosine-interpolated"
+        }
+    },
+    "dataset": {
+        "type": "custom",
+        "location": "../datasets/well_log_dataset.py",
+        "config": {
+            "root": "well_logs",
+            "length": 256
+        }
+    },
+    "optimizer": {
+        "type": "adamw",
+        "lr": 0.0002,
+        "betas": [0.95, 0.999],
+        "eps": 0.000001,
+        "weight_decay": 0.001
+    },
+    "lr_sched": {
+        "type": "constant",
+        "warmup": 0.0
+    },
+    "ema_sched": {
+        "type": "inverse",
+        "power": 0.6667,
+        "max_value": 0.9999
+    }
+}
