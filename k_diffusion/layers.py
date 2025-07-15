@@ -252,15 +252,40 @@ class Downsample2d(nn.Module):
     def __init__(self, kernel='linear', pad_mode='reflect'):
         super().__init__()
         self.pad_mode = pad_mode
-        kernel_1d = torch.tensor([_kernels[kernel]])
+        kernel_1d = torch.tensor([_kernels[kernel]], dtype=torch.float32)
         self.pad = kernel_1d.shape[1] // 2 - 1
-        self.register_buffer('kernel', kernel_1d.T @ kernel_1d)
+        self.register_buffer('kernel', kernel_1d.T @ kernel_1d)       # 2D kernel
+        self.register_buffer('kernel_1d', kernel_1d.squeeze(0))       # 1D kernel vector
 
     def forward(self, x):
-        x = F.pad(x, (self.pad,) * 4, self.pad_mode)
+        # If one spatial dimension is 1, perform 1D downsampling on the other dimension
+        if x.shape[-1] == 1 or x.shape[-2] == 1:
+            C = x.shape[1]
+            if x.shape[-1] == 1:  
+                # Vertical downsample (height > 1, width = 1)
+                x_1d = x.squeeze(-1)  # shape: [N, C, H]
+                # Pad top and bottom
+                x_1d = F.pad(x_1d, (self.pad, self.pad), mode=self.pad_mode)
+                # Build depthwise conv1d weights for each channel
+                weight1d = torch.zeros(C, C, len(self.kernel_1d), device=x.device)
+                for i in range(C):
+                    weight1d[i, i, :] = self.kernel_1d  # assign filter to channel i
+                out_1d = F.conv1d(x_1d, weight1d, stride=2)
+                return out_1d.unsqueeze(-1)  # add width dim back
+            else:
+                # Horizontal downsample (height=1, width > 1) – not typical for our case
+                x_1d = x.squeeze(-2)  # shape: [N, C, W]
+                x_1d = F.pad(x_1d, (self.pad, self.pad), mode=self.pad_mode)
+                weight1d = torch.zeros(C, C, len(self.kernel_1d), device=x.device)
+                for i in range(C):
+                    weight1d[i, i, :] = self.kernel_1d
+                out_1d = F.conv1d(x_1d, weight1d, stride=2)
+                return out_1d.unsqueeze(-2)  # add height dim back
+        # Otherwise, perform 2D downsampling as usual
+        x = F.pad(x, (self.pad,)*4, mode=self.pad_mode)
         weight = x.new_zeros([x.shape[1], x.shape[1], self.kernel.shape[0], self.kernel.shape[1]])
-        indices = torch.arange(x.shape[1], device=x.device)
-        weight[indices, indices] = self.kernel.to(weight)
+        idx = torch.arange(x.shape[1], device=x.device)
+        weight[idx, idx] = self.kernel.to(weight)
         return F.conv2d(x, weight, stride=2)
 
 
@@ -268,15 +293,39 @@ class Upsample2d(nn.Module):
     def __init__(self, kernel='linear', pad_mode='reflect'):
         super().__init__()
         self.pad_mode = pad_mode
-        kernel_1d = torch.tensor([_kernels[kernel]]) * 2
+        kernel_1d = torch.tensor([_kernels[kernel]], dtype=torch.float32) * 2
         self.pad = kernel_1d.shape[1] // 2 - 1
         self.register_buffer('kernel', kernel_1d.T @ kernel_1d)
+        self.register_buffer('kernel_1d', kernel_1d.squeeze(0))
 
     def forward(self, x):
-        x = F.pad(x, ((self.pad + 1) // 2,) * 4, self.pad_mode)
+        if x.shape[-1] == 1 or x.shape[-2] == 1:
+            C = x.shape[1]
+            if x.shape[-1] == 1:
+                # Vertical upsample
+                x_1d = x.squeeze(-1)  # [N, C, H]
+                # Pad (self.pad+1)//2 on each side before transposed conv
+                x_1d = F.pad(x_1d, ( (self.pad+1)//2, )*2, mode=self.pad_mode)
+                # Prepare conv_transpose1d weights
+                weight1d = torch.zeros(C, C, len(self.kernel_1d), device=x.device)
+                for i in range(C):
+                    weight1d[i, i, :] = self.kernel_1d
+                out_1d = F.conv_transpose1d(x_1d, weight1d, stride=2, padding=self.pad*2 + 1)
+                return out_1d.unsqueeze(-1)
+            else:
+                # Horizontal upsample
+                x_1d = x.squeeze(-2)  # [N, C, W]
+                x_1d = F.pad(x_1d, ( (self.pad+1)//2, )*2, mode=self.pad_mode)
+                weight1d = torch.zeros(C, C, len(self.kernel_1d), device=x.device)
+                for i in range(C):
+                    weight1d[i, i, :] = self.kernel_1d
+                out_1d = F.conv_transpose1d(x_1d, weight1d, stride=2, padding=self.pad*2 + 1)
+                return out_1d.unsqueeze(-2)
+        # 2D upsampling for normal images
+        x = F.pad(x, ((self.pad + 1)//2,)*4, mode=self.pad_mode)
         weight = x.new_zeros([x.shape[1], x.shape[1], self.kernel.shape[0], self.kernel.shape[1]])
-        indices = torch.arange(x.shape[1], device=x.device)
-        weight[indices, indices] = self.kernel.to(weight)
+        idx = torch.arange(x.shape[1], device=x.device)
+        weight[idx, idx] = self.kernel.to(weight)
         return F.conv_transpose2d(x, weight, stride=2, padding=self.pad * 2 + 1)
 
 
