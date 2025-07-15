@@ -1,75 +1,66 @@
-#!/usr/bin/env python3
-
-"""Samples from k-diffusion models."""
-
 import argparse
-from pathlib import Path
-
-import accelerate
-import safetensors.torch as safetorch
+import os
 import torch
-from tqdm import trange, tqdm
+import numpy as np
+from tqdm import trange
+from pathlib import Path
 
 import k_diffusion as K
 
-
 def main():
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('--batch-size', type=int, default=64,
-                   help='the batch size')
-    p.add_argument('--checkpoint', type=Path, required=True,
-                   help='the checkpoint to use')
-    p.add_argument('--config', type=Path,
-                   help='the model config')
-    p.add_argument('-n', type=int, default=64,
-                   help='the number of images to sample')
-    p.add_argument('--prefix', type=str, default='out',
-                   help='the output prefix')
-    p.add_argument('--steps', type=int, default=50,
-                   help='the number of denoising steps')
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Generate synthetic 1D well logs from a trained diffusion model.")
+    parser.add_argument('--checkpoint', type=str, required=True, help='Path to the model checkpoint (.pth) file.')
+    parser.add_argument('--config', type=str, required=True, help='Path to the model config JSON file.')
+    parser.add_argument('-n', '--n-samples', type=int, default=16, help='Number of synthetic logs to generate.')
+    parser.add_argument('--steps', type=int, default=50, help='Number of denoising steps.')
+    parser.add_argument('--output-dir', type=str, default='synthetic_logs', help='Directory to save the generated logs.')
+    parser.add_argument('--seed', type=int, help='Random seed for generation.')
+    args = parser.parse_args()
 
-    config = K.config.load_config(args.config if args.config else args.checkpoint)
+    # Setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    # Load Config
+    config = K.config.load_config(args.config)
     model_config = config['model']
-    # TODO: allow non-square input sizes
-    assert len(model_config['input_size']) == 2 and model_config['input_size'][0] == model_config['input_size'][1]
-    size = model_config['input_size']
+    height, width = model_config['input_size']
+    channels = model_config['input_channels']
+    print(f"Model expected input size: {height}x{width}, channels: {channels}")
 
-    accelerator = accelerate.Accelerator()
-    device = accelerator.device
-    print('Using device:', device, flush=True)
+    # Load Model
+    print(f"Loading model checkpoint from '{args.checkpoint}'...")
+    inner_model = K.config.make_model(config).to(device)
+    ckpt = torch.load(args.checkpoint, map_location=device)
+    
+    # Use EMA weights for better quality, fall back to main model if EMA not present
+    state_key = 'model_ema' if 'model_ema' in ckpt else 'model'
+    inner_model.load_state_dict(ckpt[state_key])
+    inner_model.eval().requires_grad_(False)
+    print(f"Loaded model weights from '{state_key}' in checkpoint.")
 
-    inner_model = K.config.make_model(config).eval().requires_grad_(False).to(device)
-    inner_model.load_state_dict(safetorch.load_file(args.checkpoint))
-
-    accelerator.print('Parameters:', K.utils.n_params(inner_model))
     model = K.Denoiser(inner_model, sigma_data=model_config['sigma_data'])
+    
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        print(f"Seed set to {args.seed}")
 
-    sigma_min = model_config['sigma_min']
-    sigma_max = model_config['sigma_max']
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    @torch.no_grad()
-    @K.utils.eval_mode(model)
-    def run():
-        if accelerator.is_local_main_process:
-            tqdm.write('Sampling...')
-        sigmas = K.sampling.get_sigmas_karras(args.steps, sigma_min, sigma_max, rho=7., device=device)
-        def sample_fn(n):
-            x = torch.randn([n, model_config['input_channels'], size[0], size[1]], device=device) * sigma_max
-            x_0 = K.sampling.sample_lms(model, x, sigmas, disable=not accelerator.is_local_main_process)
-            return x_0
-        x_0 = K.evaluation.compute_features(accelerator, sample_fn, lambda x: x, args.n, args.batch_size)
-        if accelerator.is_main_process:
-            for i, out in enumerate(x_0):
-                filename = f'{args.prefix}_{i:05}.png'
-                K.utils.to_pil_image(out).save(filename)
+    # Sampling
+    print(f"Generating {args.n_samples} synthetic logs with {args.steps} steps...")
+    with torch.no_grad():
+        x = torch.randn(args.n_samples, channels, height, width, device=device) * model_config['sigma_max']
+        sigmas = K.sampling.get_sigmas_karras(args.steps, model_config['sigma_min'], model_config['sigma_max'], rho=7.0, device=device)
+        x_0 = K.sampling.sample_dpmpp_2m_sde(model, x, sigmas, disable=False)
 
-    try:
-        run()
-    except KeyboardInterrupt:
-        pass
-
+        # Save generated logs
+        for i in trange(args.n_samples, desc="Saving logs"):
+            log_array = x_0[i].cpu().numpy().squeeze()
+            csv_path = os.path.join(args.output_dir, f"synthetic_log_{i+1:03d}.csv")
+            np.savetxt(csv_path, log_array, delimiter=",", header="Vs_mean", comments="")
+            
+    print(f"Saved {args.n_samples} synthetic logs to directory: '{args.output_dir}'")
 
 if __name__ == '__main__':
     main()
