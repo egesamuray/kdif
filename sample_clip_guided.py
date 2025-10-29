@@ -65,9 +65,23 @@ def main():
 
     config = K.config.load_config(args.config if args.config else args.checkpoint)
     model_config = config['model']
-    # TODO: allow non-square input sizes
-    assert len(model_config['input_size']) == 2 and model_config['input_size'][0] == model_config['input_size'][1]
-    size = model_config['input_size']
+    input_size = model_config['input_size']
+    if isinstance(input_size, int):
+        size = (input_size, input_size)
+    else:
+        if len(input_size) == 1:
+            size = (input_size[0], input_size[0])
+        elif len(input_size) == 2:
+            size = tuple(input_size)
+        else:
+            raise ValueError(
+                "Model input_size must contain 1 or 2 elements for CLIP-guided sampling, "
+                f"got {input_size!r}"
+            )
+
+    size = (int(size[0]), int(size[1]))
+    if size[0] <= 0 or size[1] <= 0:
+        raise ValueError(f"Model input_size must be positive, got {size!r}")
 
     accelerator = accelerate.Accelerator()
     device = accelerator.device
